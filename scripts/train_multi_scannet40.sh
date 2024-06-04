@@ -7,4 +7,4 @@ python main.py --dataset_mode=multi_obj \
                --lr=1e-4 \
                --epochs=1100 \
                --lr_drop=1000 \
-               --job_name=train_multi_obj_scannet40
+               --job_name=train_multi_obj_scannet40_hierarchical

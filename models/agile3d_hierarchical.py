@@ -211,13 +211,15 @@ class Agile3d(nn.Module):
 
     def forward_mask(self, pcd_features, aux, coordinates, pos_encodings_pcd, click_idx=None, click_time_idx=None):
 
-        # pdb.set_trace()
+        batched_indices = pcd_features.C[:, 0]
         batch_size = pcd_features.C[:,0].max() + 1
 
         predictions_mask = [[] for i in range(batch_size)]
 
         bg_learn_queries = self.bg_query_feat.weight.unsqueeze(0).repeat(batch_size, 1, 1)
         bg_learn_query_pos = self.bg_query_pos.weight.unsqueeze(0).repeat(batch_size, 1, 1)
+
+        num_pooling_steps = [max(self.hlevels) - hlevel for hlevel in self.hlevels]
 
         for b in range(batch_size):
 
@@ -314,7 +316,7 @@ class Agile3d(nn.Module):
                     output = self.c2s_attention[decoder_counter][i](
                         torch.cat([fg_queries, bg_queries],dim=0), # [num_queries, 128]
                         src_pcd_h, # [num_points, 128]
-                        memory_mask=None,      # don't use it at all
+                        memory_mask=attn_mask,      # don't use it at all
                         memory_key_padding_mask=None,
                         pos=pos_enc, # [num_points, 128]
                         query_pos=torch.cat([fg_query_pos, bg_query_pos], dim=0) # [num_queries, 128]
@@ -333,24 +335,69 @@ class Agile3d(nn.Module):
                         output
                     ) # [num_queries, 128]
 
-                    # src_pcd_h = self.s2c_attention[decoder_counter][i](
-                    #     src_pcd_h,
-                    #     queries, # [num_queries, 128]
-                    #     memory_mask=None,
-                    #     memory_key_padding_mask=None,
-                    #     pos=torch.cat([fg_query_pos, bg_query_pos], dim=0), # [num_queries, 128]
-                    #     query_pos=pos_enc # [num_points, 128]
-                    # ) # [num_points, 128]   Also refines the point cloud features
+                    if src_pcd.shape[0] == pos_enc.shape[0]:
+
+                        src_pcd = self.s2c_attention[decoder_counter][i](
+                            src_pcd,
+                            queries, # [num_queries, 128]
+                            memory_mask=None,
+                            memory_key_padding_mask=None,
+                            pos=torch.cat([fg_query_pos, bg_query_pos], dim=0), # [num_queries, 128]
+                            query_pos=pos_enc # [num_points, 128]
+                        ) # [num_points, 128]   Also refines the point cloud features
 
                     fg_queries, bg_queries = queries.split([fg_query_num, bg_query_num], 0)
 
-                    outputs_mask, attn_mask = self.mask_module(
+                    # outputs_mask, attn_mask = self.mask_module(
+                    #                                     fg_queries,
+                    #                                     bg_queries,
+                    #                                     src_pcd,
+                    #                                     ret_attn_mask=True,
+                    #                                     fg_query_num_split=fg_query_num_split)
+                    
+                    outputs_mask = self.mask_module(
                                                         fg_queries,
                                                         bg_queries,
                                                         src_pcd,
-                                                        # num_pooling_steps=len(aux) - hlevel - 1,
-                                                        ret_attn_mask=True,
+                                                        ret_attn_mask=False,
                                                         fg_query_num_split=fg_query_num_split)
+
+                    # Now we generate the attn_mask for the next decoder level (hlevel)
+                    # outputs_mask shape is [N, M+1], where N is the highest resolution level point number
+                    # The needed attn_mask shape is [num_queries, N'] where N' is the point number of the next hlevel
+                    # We need to perform self.pooling on outputs_mask for next_hlevel_steps times
+                    # Because pooling is done on a batch input, so we need to generate pseudo_batch_outputs_mask
+                    next_hlevel_steps = num_pooling_steps[(i + 1) % len(aux)]
+
+                    pseudo_batch_outputs_mask = torch.zeros(pcd_features.shape[0], outputs_mask.shape[1]).to(outputs_mask.device)
+                    b_indices = torch.where(batched_indices == b)[0]
+                    pseudo_batch_outputs_mask[b_indices] = outputs_mask
+                    outputs_mask_me = me.SparseTensor(
+                        features=pseudo_batch_outputs_mask,
+                        coordinates=pcd_features.coordinates
+                    )
+
+                    for _ in range(next_hlevel_steps):
+                        outputs_mask_me = self.pooling(outputs_mask_me)
+
+                    outputs_mask_next_hlevel = outputs_mask_me.decomposed_features[b]
+
+                    output_labels = outputs_mask_next_hlevel.argmax(1)  # merge into one mask with instance ids as labels
+
+                    bg_attn_mask = ~(output_labels == 0)
+                    bg_attn_mask = bg_attn_mask.unsqueeze(0).repeat(bg_queries.shape[0], 1)
+                    bg_attn_mask[torch.where(bg_attn_mask.sum(-1) == bg_attn_mask.shape[-1])] = False   # if all the points are labeled as back ground, then we don't need to add mask attention
+
+                    fg_attn_mask = []
+                    for fg_obj_id in range(1, outputs_mask_next_hlevel.shape[-1]):
+                        fg_obj_mask = ~(output_labels == fg_obj_id)
+                        fg_obj_mask = fg_obj_mask.unsqueeze(0).repeat(fg_query_num_split[fg_obj_id-1], 1)
+                        fg_obj_mask[torch.where(fg_obj_mask.sum(-1) == fg_obj_mask.shape[-1])] = False
+                        fg_attn_mask.append(fg_obj_mask)
+
+                    fg_attn_mask = torch.cat(fg_attn_mask, dim=0)
+
+                    attn_mask = torch.cat([fg_attn_mask, bg_attn_mask], dim=0)
 
                     predictions_mask[b].append(outputs_mask)
 
@@ -445,7 +492,7 @@ def build_agile3d(args):
                     positional_encoding_type=args.positional_encoding_type,
                     normalize_pos_enc=args.normalize_pos_enc,
                     hlevels=[0, 1, 2, 3, 4], 
-                    # hlevels=args.hlevels, 
+                    # hlevels=args.hlevels,     # set to 4 in agile3d's original code base
                     voxel_size=args.voxel_size,
                     gauss_scale=args.gauss_scale,
                     aux=args.aux
