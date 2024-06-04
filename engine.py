@@ -22,6 +22,7 @@ from utils.seg import mean_iou, mean_iou_scene, cal_click_loss_weights, extend_c
 import utils.misc as utils
 
 from evaluation.evaluator_MO import EvaluatorMO
+import pdb
 
 def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
@@ -36,10 +37,11 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
     for i, batched_inputs in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
 
+        pdb.set_trace()
         coords, raw_coords, feats, labels, _, _, click_idx, scene_name, num_obj = batched_inputs
         coords = coords.to(device)
         labels = [l.to(device) for l in labels]
-        labels_new = []
+        labels_new = []     # only contain instance ids for the selected objects
         raw_coords = raw_coords.to(device)
         feats = feats.to(device)
         batch_idx = coords[:,0]
@@ -54,7 +56,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
         #########  1. random sample obj number and obj index #########
         for idx in range(batch_idx.max()+1):
-            sample_mask = batch_idx == idx
+            sample_mask = batch_idx == idx      # process on the idx scene in this batch
             sample_labels = labels[idx]
             sample_raw_coords = raw_coords[sample_mask]
             valid_obj_idxs = torch.unique(sample_labels)
@@ -62,20 +64,20 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
             max_num_obj = len(valid_obj_idxs)
 
-            num_obj = np.random.randint(1, min(10, max_num_obj)+1)
+            num_obj = np.random.randint(1, min(10, max_num_obj)+1)  # numbers of object picked
             obj_idxs = valid_obj_idxs[torch.randperm(max_num_obj)[:num_obj]]
             sample_labels_new = torch.zeros(sample_labels.shape[0], device=device)
 
             for i, obj_id in enumerate(obj_idxs):
                 obj_mask = sample_labels == obj_id
-                sample_labels_new[obj_mask] = i+1
+                sample_labels_new[obj_mask] = i+1   # define the new instance ids for each object picked
 
                 click_idx[idx][str(i+1)] = []
 
             click_idx[idx]['0'] = []
             labels_new.append(sample_labels_new)
 
-        click_time_idx = copy.deepcopy(click_idx)
+        click_time_idx = copy.deepcopy(click_idx)   # contains the time sequence variable inside
         
         #########  2. pre interactive sampling  #########
 
@@ -95,11 +97,11 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
                     pred = [p.argmax(-1) for p in pred_logits]
 
                 for idx in range(batch_idx.max()+1):
-                    sample_mask = batch_idx == idx
+                    sample_mask = batch_idx == idx  # used to get the idx scene
                     sample_pred = pred[idx]
 
                     if current_num_iter != 0:
-                        # update prediction with sparse gt
+                        # update prediction with sparse gt => the picked points should always be classified correctly
                         for obj_id, cids in click_idx[idx].items():
                             sample_pred[cids] = int(obj_id)
 
@@ -107,6 +109,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
                     sample_raw_coords = raw_coords[sample_mask]
 
                     new_clicks, new_clicks_num, new_click_pos, new_click_time = get_simulated_clicks(sample_pred, sample_labels, sample_raw_coords, current_num_iter, training=True)
+                    # new_clicks: dict {obj_id -> [clicked points idx]}, each object may have different new click numbers?
 
                     ### add new clicks ###
                     if new_clicks is not None:
@@ -123,6 +126,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
         # loss
         click_weights = cal_click_loss_weights(coords[:,0], raw_coords, torch.cat(labels_new), click_idx)
+        pdb.set_trace()
         loss_dict = criterion(outputs, labels_new, click_weights)
         weight_dict = criterion.weight_dict
         losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)

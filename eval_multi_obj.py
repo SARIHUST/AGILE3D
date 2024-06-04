@@ -25,6 +25,8 @@ from evaluation.evaluator_MO import EvaluatorMO
 import wandb
 import os
 
+import pdb
+
 def get_args_parser():
     parser = argparse.ArgumentParser('Evaluation', add_help=False)
 
@@ -119,7 +121,7 @@ def Evaluate(model, data_loader, args, device):
             if current_num_clicks == 0:
                 pred = [torch.zeros(l.shape).to(device) for l in labels]
             else:
-
+                pdb.set_trace()
                 outputs = model.forward_mask(pcd_features, aux, coordinates, pos_encodings_pcd,
                                              click_idx=click_idx, click_time_idx=click_time_idx)
                 pred_logits = outputs['pred_masks']
@@ -196,13 +198,13 @@ def main(args):
     output_dir = Path(args.output_dir)
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-    checkpoint = torch.load(args.checkpoint, map_location='cpu')
-    missing_keys, unexpected_keys = model.load_state_dict(checkpoint['model'], strict=False)
-    unexpected_keys = [k for k in unexpected_keys if not (k.endswith('total_params') or k.endswith('total_ops'))]
-    if len(missing_keys) > 0:
-        print('Missing Keys: {}'.format(missing_keys))
-    if len(unexpected_keys) > 0:
-        print('Unexpected Keys: {}'.format(unexpected_keys))
+    # checkpoint = torch.load(args.checkpoint, map_location='cpu')
+    # missing_keys, unexpected_keys = model.load_state_dict(checkpoint['model'], strict=False)
+    # unexpected_keys = [k for k in unexpected_keys if not (k.endswith('total_params') or k.endswith('total_ops'))]
+    # if len(missing_keys) > 0:
+    #     print('Missing Keys: {}'.format(missing_keys))
+    # if len(unexpected_keys) > 0:
+    #     print('Unexpected Keys: {}'.format(unexpected_keys))
       
     Evaluate(model, data_loader_val, args, device)
 

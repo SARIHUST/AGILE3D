@@ -16,6 +16,8 @@ from .backbone import build_backbone
 
 import itertools
 
+import pdb
+
 class Agile3d(nn.Module):
     def __init__(self, backbone, hidden_dim, num_heads, dim_feedforward,
                  shared_decoder, num_decoders, num_bg_queries, dropout, pre_norm,
@@ -182,6 +184,7 @@ class Agile3d(nn.Module):
 
     def forward_mask(self, pcd_features, aux, coordinates, pos_encodings_pcd, click_idx=None, click_time_idx=None):
 
+        # pdb.set_trace()
         batch_size = pcd_features.C[:,0].max() + 1
 
         predictions_mask = [[] for i in range(batch_size)]
@@ -191,7 +194,7 @@ class Agile3d(nn.Module):
 
         for b in range(batch_size):
 
-            if coordinates.F.is_cuda():
+            if coordinates.F.is_cuda: # modify: already a bool
                 mins = coordinates.decomposed_features[b].min(dim=0)[0].unsqueeze(0)
                 maxs = coordinates.decomposed_features[b].max(dim=0)[0].unsqueeze(0)
             else:
@@ -204,11 +207,11 @@ class Agile3d(nn.Module):
 
             bg_click_idx = click_idx_sample['0']
 
-            fg_obj_num = len(click_idx_sample.keys()) - 1
+            fg_obj_num = len(click_idx_sample.keys()) - 1   # num of query objects
 
             
             fg_query_num_split = [len(click_idx_sample[str(i)]) for i in range(1, fg_obj_num+1)]
-            fg_query_num = sum(fg_query_num_split)
+            fg_query_num = sum(fg_query_num_split)  # num of query points
 
             if coordinates.F.is_cuda:
                 fg_clicks_coords = torch.vstack([coordinates.decomposed_features[b][click_idx_sample[str(i)], :]
@@ -223,7 +226,7 @@ class Agile3d(nn.Module):
 
             fg_clicks_time_idx = list(itertools.chain.from_iterable([click_time_idx_sample[str(i)] for i in range(1,fg_obj_num+1)]))
             fg_query_time = self.time_encode[fg_clicks_time_idx].T.unsqueeze(0).to(fg_query_pos.device)
-            fg_query_pos = fg_query_pos + fg_query_time
+            fg_query_pos = fg_query_pos + fg_query_time     # contains both location and time sequence encoding
 
             if len(bg_click_idx)!=0:
                 if coordinates.F.is_cuda:
@@ -273,7 +276,7 @@ class Agile3d(nn.Module):
             for decoder_counter in range(self.num_decoders):
                 if self.shared_decoder:
                     decoder_counter = 0
-                for i, hlevel in enumerate(self.hlevels):
+                for i, hlevel in enumerate(self.hlevels):   # hlevels -> U-Net abstract level reverse
 
                     pos_enc = pos_encodings_pcd[hlevel][0][b]# [num_points, 128]
 
@@ -309,7 +312,7 @@ class Agile3d(nn.Module):
                         memory_key_padding_mask=None,
                         pos=torch.cat([fg_query_pos, bg_query_pos], dim=0), # [num_queries, 128]
                         query_pos=pos_enc # [num_points, 128]
-                    ) # [num_points, 128]
+                    ) # [num_points, 128]   Also refines the point cloud features
 
                     fg_queries, bg_queries = queries.split([fg_query_num, bg_query_num], 0)
 
@@ -324,7 +327,7 @@ class Agile3d(nn.Module):
 
                     refine_time += 1
 
-        predictions_mask = [list(i) for i in zip(*predictions_mask)]
+        predictions_mask = [list(i) for i in zip(*predictions_mask)]    # (b, r, [N, M+1]) => (r, b, [N, M+1])
         
         
         
@@ -350,7 +353,7 @@ class Agile3d(nn.Module):
 
         fg_masks = []
         for fg_prod in fg_prods:
-            fg_masks.append(fg_prod.max(dim=-1, keepdim=True)[0])
+            fg_masks.append(fg_prod.max(dim=-1, keepdim=True)[0])   # use the max pool to generate the final fg_prod
 
         fg_masks = torch.cat(fg_masks, dim=-1)
         
@@ -362,11 +365,11 @@ class Agile3d(nn.Module):
 
         if ret_attn_mask:
 
-            output_labels = output_masks.argmax(1)
+            output_labels = output_masks.argmax(1)  # merge into one mask with instance ids as labels
 
             bg_attn_mask = ~(output_labels == 0)
             bg_attn_mask = bg_attn_mask.unsqueeze(0).repeat(bg_query_feat.shape[0], 1)
-            bg_attn_mask[torch.where(bg_attn_mask.sum(-1) == bg_attn_mask.shape[-1])] = False
+            bg_attn_mask[torch.where(bg_attn_mask.sum(-1) == bg_attn_mask.shape[-1])] = False   # if all the points are labeled as back ground, then we don't need to add mask attention
 
             fg_attn_mask = []
             for fg_obj_id in range(1, fg_masks.shape[-1]+1):
