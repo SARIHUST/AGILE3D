@@ -37,7 +37,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
     for i, batched_inputs in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
 
-        pdb.set_trace()
+        # pdb.set_trace()
         coords, raw_coords, feats, labels, _, _, click_idx, scene_name, num_obj = batched_inputs
         coords = coords.to(device)
         labels = [l.to(device) for l in labels]
@@ -126,7 +126,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
         # loss
         click_weights = cal_click_loss_weights(coords[:,0], raw_coords, torch.cat(labels_new), click_idx)
-        pdb.set_trace()
+        # pdb.set_trace()
         loss_dict = criterion(outputs, labels_new, click_weights)
         weight_dict = criterion.weight_dict
         losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)

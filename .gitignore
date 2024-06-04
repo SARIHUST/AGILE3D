@@ -3,3 +3,6 @@ data/
 __pycache__/
 wandb/
 wandb_keys/
+weights/
+results/
+output/

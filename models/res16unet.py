@@ -224,7 +224,7 @@ class Res16UNetBase(ResNetBase):
         # x: [497162, 3]
         out = self.conv0p1s1(x)
         out = self.bn0(out)
-        out_p1 = self.relu(out) # [497162, 3]
+        out_p1 = self.relu(out) # [497162, 32]
 
         out = self.conv1p1s2(out_p1)
         out = self.bn1(out)

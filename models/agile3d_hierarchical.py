@@ -46,6 +46,28 @@ class Agile3d(nn.Module):
             self.backbone.PLANES[7], self.mask_dim, kernel_size=1, stride=1, bias=True, D=3
         )   # add similar architectures for aux?
 
+        self.lin_squeeze_head_aux4 = self.lin_squeeze_head
+        self.lin_squeeze_head_aux3 = conv(
+            self.backbone.PLANES[6], self.mask_dim, kernel_size=1, stride=1, bias=True, D=3
+        )
+        self.lin_squeeze_head_aux2 = conv(
+            self.backbone.PLANES[5], self.mask_dim, kernel_size=1, stride=1, bias=True, D=3
+        )
+        self.lin_squeeze_head_aux1 = conv(
+            self.backbone.PLANES[4], self.mask_dim, kernel_size=1, stride=1, bias=True, D=3
+        )
+        self.lin_squeeze_head_aux0 = conv(
+            self.backbone.PLANES[3], self.mask_dim, kernel_size=1, stride=1, bias=True, D=3
+        )
+
+        self.mask_feature_head = [
+            self.lin_squeeze_head_aux0, 
+            self.lin_squeeze_head_aux1,
+            self.lin_squeeze_head_aux2,
+            self.lin_squeeze_head_aux3,
+            self.lin_squeeze_head_aux4,
+        ]
+
         self.bg_query_feat = nn.Embedding(num_bg_queries, hidden_dim)
         self.bg_query_pos = nn.Embedding(num_bg_queries, hidden_dim)
 
@@ -162,7 +184,7 @@ class Agile3d(nn.Module):
 
                 pos_encodings_pcd[-1][0].append(tmp.squeeze(0).permute((1, 0)))
 
-        return pos_encodings_pcd
+        return pos_encodings_pcd    
 
     def forward_backbone(self, x, raw_coordinates=None):
         # pdb.set_trace()
@@ -182,6 +204,8 @@ class Agile3d(nn.Module):
         pos_encodings_pcd = self.get_pos_encs(coords)
 
         pcd_features = self.lin_squeeze_head(pcd_features)
+        for i in range(len(aux)):
+            aux[i] = self.mask_feature_head[i](aux[i])  # mask all levels of output from the backbone to the same dimension
 
         return pcd_features, aux, coordinates, pos_encodings_pcd
 
@@ -282,14 +306,15 @@ class Agile3d(nn.Module):
                 for i, hlevel in enumerate(self.hlevels):   # hlevels -> U-Net abstract level reverse
                     # if we want to use hierarchical features, we should modify the src_pcd using aux
                     pos_enc = pos_encodings_pcd[hlevel][0][b]# [num_points, 128]
+                    src_pcd_h = aux[hlevel].decomposed_features[b]
 
                     if refine_time == 0:
                         attn_mask = None
 
                     output = self.c2s_attention[decoder_counter][i](
                         torch.cat([fg_queries, bg_queries],dim=0), # [num_queries, 128]
-                        src_pcd, # [num_points, 128]
-                        memory_mask=attn_mask,
+                        src_pcd_h, # [num_points, 128]
+                        memory_mask=None,      # don't use it at all
                         memory_key_padding_mask=None,
                         pos=pos_enc, # [num_points, 128]
                         query_pos=torch.cat([fg_query_pos, bg_query_pos], dim=0) # [num_queries, 128]
@@ -308,14 +333,14 @@ class Agile3d(nn.Module):
                         output
                     ) # [num_queries, 128]
 
-                    src_pcd = self.s2c_attention[decoder_counter][i](
-                        src_pcd,
-                        queries, # [num_queries, 128]
-                        memory_mask=None,
-                        memory_key_padding_mask=None,
-                        pos=torch.cat([fg_query_pos, bg_query_pos], dim=0), # [num_queries, 128]
-                        query_pos=pos_enc # [num_points, 128]
-                    ) # [num_points, 128]   Also refines the point cloud features
+                    # src_pcd_h = self.s2c_attention[decoder_counter][i](
+                    #     src_pcd_h,
+                    #     queries, # [num_queries, 128]
+                    #     memory_mask=None,
+                    #     memory_key_padding_mask=None,
+                    #     pos=torch.cat([fg_query_pos, bg_query_pos], dim=0), # [num_queries, 128]
+                    #     query_pos=pos_enc # [num_points, 128]
+                    # ) # [num_points, 128]   Also refines the point cloud features
 
                     fg_queries, bg_queries = queries.split([fg_query_num, bg_query_num], 0)
 
@@ -323,6 +348,7 @@ class Agile3d(nn.Module):
                                                         fg_queries,
                                                         bg_queries,
                                                         src_pcd,
+                                                        # num_pooling_steps=len(aux) - hlevel - 1,
                                                         ret_attn_mask=True,
                                                         fg_query_num_split=fg_query_num_split)
 
@@ -418,7 +444,8 @@ def build_agile3d(args):
                     pre_norm=args.pre_norm, 
                     positional_encoding_type=args.positional_encoding_type,
                     normalize_pos_enc=args.normalize_pos_enc,
-                    hlevels=args.hlevels, 
+                    hlevels=[0, 1, 2, 3, 4], 
+                    # hlevels=args.hlevels, 
                     voxel_size=args.voxel_size,
                     gauss_scale=args.gauss_scale,
                     aux=args.aux

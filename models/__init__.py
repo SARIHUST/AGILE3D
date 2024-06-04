@@ -1,5 +1,5 @@
-
-from .agile3d import build_agile3d
+from .agile3d_hierarchical import build_agile3d
+# from .agile3d import build_agile3d
 
 from .criterion import build_mask_criterion
 

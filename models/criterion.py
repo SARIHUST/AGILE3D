@@ -27,7 +27,7 @@ class SetCriterion(nn.Module):
         :return: tensor
         """
         assert input.ndim >= 2
-        pdb.set_trace()
+        # pdb.set_trace()
         input = input.softmax(1)
         num_classes = input.size(1)
 
@@ -115,8 +115,6 @@ class SetCriterion(nn.Module):
         return loss_map[loss](outputs, targets, weights)
 
     def forward(self, outputs, targets, weights=None):
-
-        pdb.set_trace()
 
         outputs_without_aux = {k: v for k, v in outputs.items() if k != 'aux_outputs' and k != 'enc_outputs'}
 

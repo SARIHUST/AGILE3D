@@ -121,7 +121,7 @@ def Evaluate(model, data_loader, args, device):
             if current_num_clicks == 0:
                 pred = [torch.zeros(l.shape).to(device) for l in labels]
             else:
-                pdb.set_trace()
+                # pdb.set_trace()
                 outputs = model.forward_mask(pcd_features, aux, coordinates, pos_encodings_pcd,
                                              click_idx=click_idx, click_time_idx=click_time_idx)
                 pred_logits = outputs['pred_masks']
@@ -153,7 +153,7 @@ def Evaluate(model, data_loader, args, device):
                 sample_iou.cpu().numpy()) + '\n'
                 f.write(line)
 
-                print(scene_name[idx], 'Object: ', num_obj[idx], 'num clicks: ', current_num_clicks/num_obj[idx], 'IOU: ', sample_iou.item())
+                # print(scene_name[idx], 'Object: ', num_obj[idx], 'num clicks: ', current_num_clicks/num_obj[idx], 'IOU: ', sample_iou.item())
     
                 new_clicks, new_clicks_num, new_click_pos, new_click_time = get_simulated_clicks(sample_pred, sample_labels, sample_raw_coords, current_num_clicks, training=False)
 
@@ -198,13 +198,13 @@ def main(args):
     output_dir = Path(args.output_dir)
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-    # checkpoint = torch.load(args.checkpoint, map_location='cpu')
-    # missing_keys, unexpected_keys = model.load_state_dict(checkpoint['model'], strict=False)
-    # unexpected_keys = [k for k in unexpected_keys if not (k.endswith('total_params') or k.endswith('total_ops'))]
-    # if len(missing_keys) > 0:
-    #     print('Missing Keys: {}'.format(missing_keys))
-    # if len(unexpected_keys) > 0:
-    #     print('Unexpected Keys: {}'.format(unexpected_keys))
+    checkpoint = torch.load(args.checkpoint, map_location='cpu')
+    missing_keys, unexpected_keys = model.load_state_dict(checkpoint['model'], strict=False)
+    unexpected_keys = [k for k in unexpected_keys if not (k.endswith('total_params') or k.endswith('total_ops'))]
+    if len(missing_keys) > 0:
+        print('Missing Keys: {}'.format(missing_keys))
+    if len(unexpected_keys) > 0:
+        print('Unexpected Keys: {}'.format(unexpected_keys))
       
     Evaluate(model, data_loader_val, args, device)
 
