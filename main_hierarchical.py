@@ -16,7 +16,7 @@ from torch.utils.data import DataLoader
 import utils.misc as utils
 from datasets import build_dataset
 from engine import evaluate, train_one_epoch
-from models import build_model, build_criterion
+from models import build_model_hierarchical, build_criterion
 
 import wandb
 import os
@@ -100,7 +100,7 @@ def main(args):
     random.seed(seed)
 
     # build model
-    model = build_model(args)
+    model = build_model_hierarchical(args)
     criterion = build_criterion(args)
     model.to(device)
     criterion.to(device)

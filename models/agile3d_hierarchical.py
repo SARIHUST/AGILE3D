@@ -220,6 +220,7 @@ class Agile3d(nn.Module):
         bg_learn_query_pos = self.bg_query_pos.weight.unsqueeze(0).repeat(batch_size, 1, 1)
 
         num_pooling_steps = [max(self.hlevels) - hlevel for hlevel in self.hlevels]
+        src_pcd_hlevel_feats = [[aux[h].decomposed_features[b] for b in range(batch_size)] for h in self.hlevels]
 
         for b in range(batch_size):
 
@@ -295,10 +296,10 @@ class Agile3d(nn.Module):
             else:
                 bg_queries = bg_learn_queries[b]
 
-            if pcd_features.F.is_cuda:
-                src_pcd = pcd_features.decomposed_features[b]
-            else:
-                src_pcd = pcd_features.F
+            # if pcd_features.F.is_cuda:
+            #     src_pcd = pcd_features.decomposed_features[b]
+            # else:
+            #     src_pcd = pcd_features.F
 
             refine_time = 0
 
@@ -308,7 +309,8 @@ class Agile3d(nn.Module):
                 for i, hlevel in enumerate(self.hlevels):   # hlevels -> U-Net abstract level reverse
                     # if we want to use hierarchical features, we should modify the src_pcd using aux
                     pos_enc = pos_encodings_pcd[hlevel][0][b]# [num_points, 128]
-                    src_pcd_h = aux[hlevel].decomposed_features[b]
+                    # src_pcd_h = aux[hlevel].decomposed_features[b]
+                    src_pcd_h = src_pcd_hlevel_feats[i][b]
 
                     if refine_time == 0:
                         attn_mask = None
@@ -335,16 +337,17 @@ class Agile3d(nn.Module):
                         output
                     ) # [num_queries, 128]
 
-                    if src_pcd.shape[0] == pos_enc.shape[0]:
+                    src_pcd_h = self.s2c_attention[decoder_counter][i](
+                        src_pcd_h,
+                        queries, # [num_queries, 128]
+                        memory_mask=None,
+                        memory_key_padding_mask=None,
+                        pos=torch.cat([fg_query_pos, bg_query_pos], dim=0), # [num_queries, 128]
+                        query_pos=pos_enc # [num_points, 128]
+                    ) # [num_points, 128]   Also refines the point cloud features
 
-                        src_pcd = self.s2c_attention[decoder_counter][i](
-                            src_pcd,
-                            queries, # [num_queries, 128]
-                            memory_mask=None,
-                            memory_key_padding_mask=None,
-                            pos=torch.cat([fg_query_pos, bg_query_pos], dim=0), # [num_queries, 128]
-                            query_pos=pos_enc # [num_points, 128]
-                        ) # [num_points, 128]   Also refines the point cloud features
+                    src_pcd_hlevel_feats[i][b] = src_pcd_h  # store the refined features back
+                    src_pcd = src_pcd_hlevel_feats[len(self.hlevels)-1][b] # highest resolution, used for mask_module
 
                     fg_queries, bg_queries = queries.split([fg_query_num, bg_query_num], 0)
 
@@ -354,7 +357,6 @@ class Agile3d(nn.Module):
                     #                                     src_pcd,
                     #                                     ret_attn_mask=True,
                     #                                     fg_query_num_split=fg_query_num_split)
-                    
                     outputs_mask = self.mask_module(
                                                         fg_queries,
                                                         bg_queries,
@@ -404,8 +406,7 @@ class Agile3d(nn.Module):
                     refine_time += 1
 
         predictions_mask = [list(i) for i in zip(*predictions_mask)]    # (b, r, [N, M+1]) => (r, b, [N, M+1])
-        
-        
+
         
         out= {
             'pred_masks': predictions_mask[-1],

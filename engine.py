@@ -275,7 +275,7 @@ def evaluate(model, criterion, data_loader, args, epoch, device):
                 sample_iou.cpu().numpy()) + '\n'
                 f.write(line)
 
-                print(scene_name[idx], 'Object: ', num_obj[idx], 'num clicks: ', current_num_clicks/num_obj[idx], 'IOU: ', sample_iou.item())
+                # print(scene_name[idx], 'Object: ', num_obj[idx], 'num clicks: ', current_num_clicks/num_obj[idx], 'IOU: ', sample_iou.item())
     
                 new_clicks, new_clicks_num, new_click_pos, new_click_time = get_simulated_clicks(sample_pred, sample_labels, sample_raw_coords, current_num_clicks, training=False)
 
