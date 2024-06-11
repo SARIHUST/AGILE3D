@@ -16,7 +16,7 @@ from torch.utils.data import DataLoader
 import utils.misc as utils
 from datasets import build_dataset
 from engine import evaluate, train_one_epoch
-from models import build_model_hierarchical, build_criterion
+from models import build_model_feature_fusion, build_criterion
 
 import wandb
 import os
@@ -49,7 +49,8 @@ def get_args_parser():
     parser.add_argument('--normalize_pos_enc', default=True, type=bool)
     parser.add_argument('--positional_encoding_type', default="fourier", type=str)
     parser.add_argument('--gauss_scale', default=1.0, type=float, help='gauss scale for positional encoding')
-    parser.add_argument('--hlevels', default=[0, 1, 2, 3, 4], type=list)
+    parser.add_argument('--hlevels', default=[4], type=list)
+    parser.add_argument('--flevels', default=[3, 4], type=list)
     parser.add_argument('--shared_decoder', default=False, type=bool)
 
     # loss
@@ -100,7 +101,7 @@ def main(args):
     random.seed(seed)
 
     # build model
-    model = build_model_hierarchical(args)
+    model = build_model_feature_fusion(args)
     criterion = build_criterion(args)
     model.to(device)
     criterion.to(device)
@@ -153,28 +154,28 @@ def main(args):
             lr_scheduler.step(lr_scheduler.last_epoch)
             args.start_epoch = checkpoint['epoch'] + 1
 
-        # test_stats = evaluate(
-        #     model, criterion, data_loader_val, args, args.start_epoch, device
-        # )
+        test_stats = evaluate(
+            model, criterion, data_loader_val, args, args.start_epoch, device
+        )
 
-        # wandb.log({
-        #     "val/epoch": args.start_epoch,
-        #     "val/loss_epoch": test_stats['loss'],
-        #     "val/loss_bce_epoch": test_stats['loss_bce'],
-        #     "val/loss_dice_epoch": test_stats['loss_dice'],
-        #     "val/mIoU_epoch": test_stats['mIoU'],
+        wandb.log({
+            "val/epoch": args.start_epoch,
+            "val/loss_epoch": test_stats['loss'],
+            "val/loss_bce_epoch": test_stats['loss_bce'],
+            "val/loss_dice_epoch": test_stats['loss_dice'],
+            "val/mIoU_epoch": test_stats['mIoU'],
 
-        #     "val_metrics/NoC_50": test_stats['NoC@50'],
-        #     "val_metrics/NoC_65": test_stats['NoC@65'],
-        #     "val_metrics/NoC_80": test_stats['NoC@80'],
-        #     "val_metrics/NoC_85": test_stats['NoC@85'],
-        #     "val_metrics/NoC_90": test_stats['NoC@90'],
-        #     "val_metrics/IoU_1": test_stats['IoU@1'],
-        #     "val_metrics/IoU_3": test_stats['IoU@3'],
-        #     "val_metrics/IoU_5": test_stats['IoU@5'],
-        #     "val_metrics/IoU_10": test_stats['IoU@10'],
-        #     "val_metrics/IoU_15": test_stats['IoU@15'],
-        #     })
+            "val_metrics/NoC_50": test_stats['NoC@50'],
+            "val_metrics/NoC_65": test_stats['NoC@65'],
+            "val_metrics/NoC_80": test_stats['NoC@80'],
+            "val_metrics/NoC_85": test_stats['NoC@85'],
+            "val_metrics/NoC_90": test_stats['NoC@90'],
+            "val_metrics/IoU_1": test_stats['IoU@1'],
+            "val_metrics/IoU_3": test_stats['IoU@3'],
+            "val_metrics/IoU_5": test_stats['IoU@5'],
+            "val_metrics/IoU_10": test_stats['IoU@10'],
+            "val_metrics/IoU_15": test_stats['IoU@15'],
+            })
 
     print("Start training")
 
@@ -247,8 +248,8 @@ if __name__ == '__main__':
     args = parser.parse_args()
     now = datetime.datetime.now()
     run_id = now.strftime("%Y-%m-%d-%H-%M-%S")
-    args.run_id = run_id + '_' + args.job_name
-    args.output_dir = os.path.join(args.output_dir, run_id)
+    args.run_id = args.job_name + '_' + run_id
+    args.output_dir = os.path.join(args.output_dir, args.run_id)
     args.valResults_dir = os.path.join(args.output_dir, 'valResults')
 
     if args.output_dir:

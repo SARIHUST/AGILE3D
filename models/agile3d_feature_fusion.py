@@ -18,10 +18,10 @@ import itertools
 
 import pdb
 
-class Agile3d(nn.Module):
+class Agile3d_Fusion(nn.Module):
     def __init__(self, backbone, hidden_dim, num_heads, dim_feedforward,
                  shared_decoder, num_decoders, num_bg_queries, dropout, pre_norm,
-                 positional_encoding_type, normalize_pos_enc, hlevels,
+                 positional_encoding_type, normalize_pos_enc, hlevels, flevels,
                  voxel_size, gauss_scale, aux
                  ):
         super().__init__()
@@ -29,6 +29,7 @@ class Agile3d(nn.Module):
         self.gauss_scale = gauss_scale
         self.voxel_size = voxel_size
         self.hlevels = hlevels
+        self.flevels = flevels
         self.normalize_pos_enc = normalize_pos_enc
         self.num_decoders = num_decoders
         self.num_bg_queries = num_bg_queries
@@ -44,7 +45,17 @@ class Agile3d(nn.Module):
 
         self.lin_squeeze_head = conv(
             self.backbone.PLANES[7], self.mask_dim, kernel_size=1, stride=1, bias=True, D=3
-        )   # add similar architectures for aux?
+        )
+
+        self.flevel_to_plane_idx = {0: 3, 1: 4, 2: 5, 3: 6, 4: 7}
+        self.concat_dim = self.mask_dim
+        for i, f in enumerate(self.flevels):
+            if i < len(self.flevels) - 1:   # the last concat feature is just the pcd_feature
+                self.concat_dim += self.backbone.PLANES[self.flevel_to_plane_idx[f]]
+
+        self.mask_feature_head = conv(
+            self.concat_dim, self.mask_dim, kernel_size=1, stride=1, bias=True, D=3
+        )
 
         self.bg_query_feat = nn.Embedding(num_bg_queries, hidden_dim)
         self.bg_query_pos = nn.Embedding(num_bg_queries, hidden_dim)
@@ -187,13 +198,28 @@ class Agile3d(nn.Module):
 
     def forward_mask(self, pcd_features, aux, coordinates, pos_encodings_pcd, click_idx=None, click_time_idx=None):
 
-        pdb.set_trace()
         batch_size = pcd_features.C[:,0].max() + 1
 
         predictions_mask = [[] for i in range(batch_size)]
 
         bg_learn_queries = self.bg_query_feat.weight.unsqueeze(0).repeat(batch_size, 1, 1)
         bg_learn_query_pos = self.bg_query_pos.weight.unsqueeze(0).repeat(batch_size, 1, 1)
+
+        total_points_num = pcd_features.shape[0]
+        concat_feats = []
+        for i, h in enumerate(self.flevels):
+            if i < len(self.flevels) - 1:
+                aux_h = aux[h].features.unsqueeze(0).unsqueeze(0)
+                upsampled_aux_h = F.interpolate(aux_h, (total_points_num, aux_h.shape[-1]), mode='bilinear')
+            else:
+                upsampled_aux_h = pcd_features.features
+            concat_feats.append(upsampled_aux_h.squeeze(0).squeeze(0))
+        concat_feats = torch.concat(concat_feats, dim=1)
+        concat_feats_me = me.SparseTensor(
+            features=concat_feats,
+            coordinates=pcd_features.coordinates
+        )
+        concat_feats_me = self.mask_feature_head(concat_feats_me)
 
         for b in range(batch_size):
 
@@ -270,9 +296,11 @@ class Agile3d(nn.Module):
                 bg_queries = bg_learn_queries[b]
 
             if pcd_features.F.is_cuda:
-                src_pcd = pcd_features.decomposed_features[b]
+                # src_pcd = pcd_features.decomposed_features[b]
+                src_pcd = concat_feats_me.decomposed_features[b]
             else:
-                src_pcd = pcd_features.F
+                # src_pcd = pcd_features.F
+                src_pcd = concat_feats_me.F
 
             refine_time = 0
 
@@ -406,7 +434,7 @@ def build_agile3d(args):
 
     backbone = build_backbone(args)
 
-    model = Agile3d(
+    model = Agile3d_Fusion(
                     backbone=backbone, 
                     hidden_dim=args.hidden_dim,
                     num_heads=args.num_heads, 
@@ -418,7 +446,8 @@ def build_agile3d(args):
                     pre_norm=args.pre_norm, 
                     positional_encoding_type=args.positional_encoding_type,
                     normalize_pos_enc=args.normalize_pos_enc,
-                    hlevels=args.hlevels, 
+                    hlevels=args.hlevels,   # hlevels -> hierarchical levels in attn
+                    flevels=args.flevels,   # flevels -> hierarchical levels in feature fusion
                     voxel_size=args.voxel_size,
                     gauss_scale=args.gauss_scale,
                     aux=args.aux
