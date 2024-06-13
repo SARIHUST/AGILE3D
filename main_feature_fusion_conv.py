@@ -16,7 +16,7 @@ from torch.utils.data import DataLoader
 import utils.misc as utils
 from datasets import build_dataset
 from engine import evaluate, train_one_epoch
-from models import build_model_feature_fusion, build_criterion
+from models import build_model_feature_fusion_conv, build_criterion
 
 import wandb
 import os
@@ -52,7 +52,6 @@ def get_args_parser():
     parser.add_argument('--hlevels', default=[4], type=list)
     parser.add_argument('--flevels', default=[3, 4], type=list)
     parser.add_argument('--shared_decoder', default=False, type=bool)
-    parser.add_argument('--multi_level_upsample', default=False, type=bool)
 
     # loss
     parser.add_argument('--losses', default=['bce','dice'], type=list)
@@ -102,7 +101,7 @@ def main(args):
     random.seed(seed)
 
     # build model
-    model = build_model_feature_fusion(args)
+    model = build_model_feature_fusion_conv(args)
     criterion = build_criterion(args)
     model.to(device)
     criterion.to(device)

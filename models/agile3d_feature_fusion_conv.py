@@ -6,9 +6,10 @@ import torch
 import torch.nn as nn
 import MinkowskiEngine.MinkowskiOps as me
 from MinkowskiEngine.MinkowskiPooling import MinkowskiAvgPooling
+from MinkowskiEngine import MinkowskiReLU
 import numpy as np
 from torch.nn import functional as F
-from models.modules.common import conv
+from models.modules.common import conv, conv_tr, get_norm, NormType
 from models.modules.attention_block import *
 from models.position_embedding import PositionEmbeddingCoordsSine, PositionalEncoding3D, PositionalEncoding1D
 from torch.cuda.amp import autocast
@@ -21,7 +22,7 @@ import pdb
 class Agile3d_Fusion(nn.Module):
     def __init__(self, backbone, hidden_dim, num_heads, dim_feedforward,
                  shared_decoder, num_decoders, num_bg_queries, dropout, pre_norm,
-                 positional_encoding_type, normalize_pos_enc, hlevels, flevels, multi_level_upsample,
+                 positional_encoding_type, normalize_pos_enc, hlevels, flevels,
                  voxel_size, gauss_scale, aux
                  ):
         super().__init__()
@@ -30,7 +31,6 @@ class Agile3d_Fusion(nn.Module):
         self.voxel_size = voxel_size
         self.hlevels = hlevels
         self.flevels = flevels
-        self.multi_level_upsample = multi_level_upsample
         self.normalize_pos_enc = normalize_pos_enc
         self.num_decoders = num_decoders
         self.num_bg_queries = num_bg_queries
@@ -49,10 +49,25 @@ class Agile3d_Fusion(nn.Module):
         )
 
         self.flevel_to_plane_idx = {0: 3, 1: 4, 2: 5, 3: 6, 4: 7}
-        self.concat_dim = self.mask_dim
-        for i, f in enumerate(self.flevels):
-            if i < len(self.flevels) - 1:   # the last concat feature is just the pcd_feature
-                self.concat_dim += self.backbone.PLANES[self.flevel_to_plane_idx[f]]
+        self.concat_dim = self.mask_dim + self.backbone.PLANES[7] * (len(self.flevels) - 1)
+        self.upsample_blocks = []
+        for i in range(len(self.flevel_to_plane_idx)):
+            if i < len(self.flevel_to_plane_idx) - 1:   
+                in_planes = self.backbone.PLANES[self.flevel_to_plane_idx[i]]
+                out_planes = self.backbone.PLANES[self.flevel_to_plane_idx[i+1]]
+                self.upsample_blocks.append(
+                    nn.Sequential(
+                        conv_tr(
+                            in_planes=in_planes, 
+                            out_planes=out_planes,
+                            kernel_size=2,
+                            upsample_stride=2,
+                            D=3
+                        ), 
+                        get_norm(NormType.BATCH_NORM, out_planes, 3),
+                        MinkowskiReLU(inplace=True)
+                    ).cuda()
+                )
 
         self.mask_feature_head = conv(
             self.concat_dim, self.mask_dim, kernel_size=1, stride=1, bias=True, D=3
@@ -198,7 +213,7 @@ class Agile3d_Fusion(nn.Module):
         return pcd_features, aux, coordinates, pos_encodings_pcd
 
     def forward_mask(self, pcd_features, aux, coordinates, pos_encodings_pcd, click_idx=None, click_time_idx=None):
-
+        # pdb.set_trace()
         batch_size = pcd_features.C[:,0].max() + 1
 
         predictions_mask = [[] for i in range(batch_size)]
@@ -206,32 +221,18 @@ class Agile3d_Fusion(nn.Module):
         bg_learn_queries = self.bg_query_feat.weight.unsqueeze(0).repeat(batch_size, 1, 1)
         bg_learn_query_pos = self.bg_query_pos.weight.unsqueeze(0).repeat(batch_size, 1, 1)
 
-        total_points_num = pcd_features.shape[0]
         concat_feats = []
-        if not self.multi_level_upsample:
-            for i, h in enumerate(self.flevels):
-                if i < len(self.flevels) - 1:
-                    aux_h = aux[h].features.unsqueeze(0).unsqueeze(0)
-                    upsampled_aux_h = F.interpolate(aux_h, (total_points_num, aux_h.shape[-1]), mode='bilinear')
-                else:
-                    upsampled_aux_h = pcd_features.features
-                concat_feats.append(upsampled_aux_h.squeeze())
-        else:
-            for i, h in enumerate(self.flevels):
-                if i < len(self.flevels) - 1:
-                    aux_h = aux[h].features
-                else:
-                    aux_h = pcd_features.features
-                num_points = aux_h.shape[0]
-                for j in range(len(concat_feats)):
-                    dimension = concat_feats[j].shape[1]
-                    concat_feats[j] = F.interpolate(
-                        concat_feats[j].unsqueeze(0).unsqueeze(0), 
-                        (num_points, dimension),
-                        mode='bilinear'
-                    ).squeeze()
-                concat_feats.append(aux_h)
         
+        for i, h in enumerate(self.flevels):
+            if i < len(self.flevels) - 1:
+                aux_h = aux[h]
+                for j in range(h, len(self.upsample_blocks)):
+                    aux_h = self.upsample_blocks[j](aux_h)
+            else:
+                aux_h = pcd_features
+            concat_feats.append(aux_h)
+        
+        concat_feats = [feat_me.F for feat_me in concat_feats]
         concat_feats = torch.concat(concat_feats, dim=1)
         concat_feats_me = me.SparseTensor(
             features=concat_feats,
@@ -466,7 +467,6 @@ def build_agile3d(args):
                     normalize_pos_enc=args.normalize_pos_enc,
                     hlevels=args.hlevels,   # hlevels -> hierarchical levels in attn
                     flevels=args.flevels,   # flevels -> hierarchical levels in feature fusion
-                    multi_level_upsample=args.multi_level_upsample,
                     voxel_size=args.voxel_size,
                     gauss_scale=args.gauss_scale,
                     aux=args.aux
